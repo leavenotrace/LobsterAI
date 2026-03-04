@@ -28,7 +28,7 @@ import {
   IMConnectivityVerdict,
 } from './types';
 import type { Database } from 'sql.js';
-import type { CoworkRunner } from '../libs/coworkRunner';
+import type { CoworkRuntime } from '../libs/agentEngine/types';
 import type { CoworkStore } from '../coworkStore';
 const CONNECTIVITY_TIMEOUT_MS = 10_000;
 const INBOUND_ACTIVITY_WARN_AFTER_MS = 2 * 60 * 1000;
@@ -47,8 +47,9 @@ interface DiscordUserResponse {
 }
 
 export interface IMGatewayManagerOptions {
-  coworkRunner?: CoworkRunner;
+  coworkRuntime?: CoworkRuntime;
   coworkStore?: CoworkStore;
+  ensureCoworkReady?: () => Promise<void>;
 }
 
 export class IMGatewayManager extends EventEmitter {
@@ -63,9 +64,10 @@ export class IMGatewayManager extends EventEmitter {
   private coworkHandler: IMCoworkHandler | null = null;
   private getLLMConfig: (() => Promise<any>) | null = null;
   private getSkillsPrompt: (() => Promise<string | null>) | null = null;
+  private ensureCoworkReady: (() => Promise<void>) | null = null;
 
   // Cowork dependencies
-  private coworkRunner: CoworkRunner | null = null;
+  private coworkRuntime: CoworkRuntime | null = null;
   private coworkStore: CoworkStore | null = null;
 
   // NIM probe mutex: serializes concurrent connectivity tests
@@ -83,10 +85,11 @@ export class IMGatewayManager extends EventEmitter {
     this.xiaomifengGateway = new XiaomifengGateway();
 
     // Store Cowork dependencies if provided
-    if (options?.coworkRunner && options?.coworkStore) {
-      this.coworkRunner = options.coworkRunner;
+    if (options?.coworkRuntime && options?.coworkStore) {
+      this.coworkRuntime = options.coworkRuntime;
       this.coworkStore = options.coworkStore;
     }
+    this.ensureCoworkReady = options?.ensureCoworkReady ?? null;
 
     // Forward gateway events
     this.setupGatewayEventForwarding();
@@ -264,6 +267,9 @@ export class IMGatewayManager extends EventEmitter {
 
         // Always use Cowork mode if handler is available
         if (this.coworkHandler) {
+          if (this.ensureCoworkReady) {
+            await this.ensureCoworkReady();
+          }
           console.log('[IMGatewayManager] Using Cowork mode for message processing');
           response = await this.coworkHandler.processMessage(message);
         } else {
@@ -380,9 +386,9 @@ export class IMGatewayManager extends EventEmitter {
    */
   private updateCoworkHandler(): void {
     // Always create Cowork handler if we have the required dependencies
-    if (this.coworkRunner && this.coworkStore && !this.coworkHandler) {
+    if (this.coworkRuntime && this.coworkStore && !this.coworkHandler) {
       this.coworkHandler = new IMCoworkHandler({
-        coworkRunner: this.coworkRunner,
+        coworkRuntime: this.coworkRuntime,
         coworkStore: this.coworkStore,
         imStore: this.imStore,
         getSkillsPrompt: this.getSkillsPrompt || undefined,

@@ -103,6 +103,32 @@ npm run dist:win
 npm run dist:linux
 ```
 
+桌面端打包（macOS / Windows / Linux）都会把预构建的 OpenClaw runtime 内置到 `Resources/cfmind`。
+`npm run dist:mac`、`npm run dist:win`、`npm run dist:linux` 在打包前都会自动执行对应平台的 OpenClaw runtime 构建步骤。
+默认 OpenClaw 源码路径为相对本仓库的 `../openclaw`，也可按需覆盖：
+
+```bash
+OPENCLAW_SRC=/path/to/openclaw npm run dist:win
+```
+
+也可以手动构建 OpenClaw runtime：
+
+```bash
+# 按当前主机平台自动选择 target（mac/win/linux + 架构）
+npm run openclaw:runtime:host
+
+# 显式指定目标平台
+npm run openclaw:runtime:mac-arm64
+npm run openclaw:runtime:win-x64
+npm run openclaw:runtime:linux-x64
+```
+
+如果希望开发启动前自动准备 OpenClaw runtime：
+
+```bash
+npm run electron:dev:openclaw
+```
+
 Windows 打包会内置便携 Python 运行时到 `resources/python-win`（安装包资源目录为 `python-win`），终端用户无需手动安装 Python。
 该运行时以解释器为主，不预装 LobsterAI 技能所需的 Python 三方包；相关依赖可在运行时按需安装。
 默认情况下，如果未提供预构建压缩包，打包脚本会直接从 python.org 下载官方 embeddable Python 运行时。

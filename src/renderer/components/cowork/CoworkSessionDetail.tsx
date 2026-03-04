@@ -123,6 +123,63 @@ type ParsedTodoItem = {
 
 const normalizeToolName = (value: string): string => value.toLowerCase().replace(/[\s_]+/g, '');
 
+const TOOL_USE_ERROR_TAG_PATTERN = /^<tool_use_error>([\s\S]*?)<\/tool_use_error>$/i;
+const ANSI_ESCAPE_PATTERN = /\u001B\[[0-?]*[ -/]*[@-~]/g;
+
+const getToolDisplayName = (toolName: string | undefined): string => {
+  if (!toolName) return 'Tool';
+  const normalized = normalizeToolName(toolName);
+  switch (normalized) {
+    case 'exec':
+    case 'bash':
+    case 'shell':
+      return 'Bash';
+    case 'read':
+    case 'readfile':
+      return 'Read';
+    case 'write':
+    case 'writefile':
+      return 'Write';
+    case 'edit':
+    case 'editfile':
+      return 'Edit';
+    case 'multiedit':
+      return 'MultiEdit';
+    case 'process':
+      return 'Process';
+    default:
+      return toolName;
+  }
+};
+
+const isBashLikeToolName = (toolName: string | undefined): boolean => {
+  if (!toolName) return false;
+  const normalized = normalizeToolName(toolName);
+  return normalized === 'bash' || normalized === 'exec' || normalized === 'shell';
+};
+
+const getToolInputString = (
+  input: Record<string, unknown>,
+  keys: string[],
+): string | null => {
+  for (const key of keys) {
+    const value = input[key];
+    if (typeof value === 'string' && value.trim()) {
+      return value;
+    }
+  }
+  return null;
+};
+
+const truncatePreview = (value: string, maxLength = 120): string =>
+  value.length <= maxLength ? value : `${value.slice(0, maxLength - 3)}...`;
+
+const normalizeToolResultText = (value: string): string => {
+  const withoutAnsi = value.replace(ANSI_ESCAPE_PATTERN, '');
+  const errorTagMatch = withoutAnsi.trim().match(TOOL_USE_ERROR_TAG_PATTERN);
+  return errorTagMatch ? errorTagMatch[1].trim() : withoutAnsi;
+};
+
 const isTodoWriteToolName = (toolName: string | undefined): boolean => {
   if (!toolName) return false;
   return normalizeToolName(toolName) === 'todowrite';
@@ -202,23 +259,40 @@ const getToolInputSummary = (
     return items ? getTodoWriteSummary(items) : null;
   }
 
-  switch (toolName) {
-    case 'Bash':
-      return typeof input.command === 'string'
-        ? input.command
-        : getStringArray(input.commands);
-    case 'Read':
-    case 'Write':
-    case 'Edit':
-    case 'MultiEdit':
-      return typeof input.file_path === 'string' ? input.file_path : null;
-    case 'Glob':
-    case 'Grep':
-      return typeof input.pattern === 'string' ? input.pattern : null;
-    case 'Task':
-      return typeof input.description === 'string' ? input.description : null;
-    case 'WebFetch':
-      return typeof input.url === 'string' ? input.url : null;
+  const normalizedToolName = normalizeToolName(toolName);
+
+  switch (normalizedToolName) {
+    case 'bash':
+    case 'exec':
+    case 'shell':
+      return getToolInputString(input, ['command', 'cmd', 'script'])
+        ?? getStringArray(input.commands);
+    case 'read':
+    case 'readfile':
+    case 'write':
+    case 'writefile':
+    case 'edit':
+    case 'editfile':
+    case 'multiedit':
+      return getToolInputString(input, ['file_path', 'path', 'filePath', 'target_file', 'targetFile'])
+        ?? (
+          typeof input.content === 'string' && input.content.trim()
+            ? truncatePreview(input.content.split('\n')[0].trim())
+            : null
+        );
+    case 'glob':
+    case 'grep':
+      return getToolInputString(input, ['pattern', 'query']);
+    case 'task':
+      return getToolInputString(input, ['description', 'task']);
+    case 'webfetch':
+      return getToolInputString(input, ['url']);
+    case 'process': {
+      const action = getToolInputString(input, ['action']);
+      const sessionId = getToolInputString(input, ['sessionId', 'session_id']);
+      if (action && sessionId) return `${action} · ${sessionId}`;
+      return action ?? sessionId;
+    }
     default:
       return null;
   }
@@ -241,13 +315,13 @@ const hasText = (value: unknown): value is string =>
 
 const getToolResultDisplay = (message: CoworkMessage): string => {
   if (hasText(message.content)) {
-    return message.content;
+    return normalizeToolResultText(message.content);
   }
   if (hasText(message.metadata?.toolResult)) {
-    return message.metadata?.toolResult ?? '';
+    return normalizeToolResultText(message.metadata?.toolResult ?? '');
   }
   if (hasText(message.metadata?.error)) {
-    return message.metadata?.error ?? '';
+    return normalizeToolResultText(message.metadata?.error ?? '');
   }
   return '';
 };
@@ -601,23 +675,28 @@ const ToolCallGroup: React.FC<{
   mapDisplayText,
 }) => {
   const { toolUse, toolResult } = group;
-  const toolName = typeof toolUse.metadata?.toolName === 'string' ? toolUse.metadata.toolName : 'Tool';
+  const rawToolName = typeof toolUse.metadata?.toolName === 'string' ? toolUse.metadata.toolName : 'Tool';
+  const toolName = getToolDisplayName(rawToolName);
   const toolInput = toolUse.metadata?.toolInput;
-  const isTodoWriteTool = isTodoWriteToolName(toolName);
+  const isTodoWriteTool = isTodoWriteToolName(rawToolName);
   const todoItems = isTodoWriteTool ? parseTodoWriteItems(toolInput) : null;
   const mapText = mapDisplayText ?? ((value: string) => value);
-  const toolInputDisplayRaw = formatToolInput(toolName, toolInput);
+  const toolInputDisplayRaw = formatToolInput(rawToolName, toolInput);
   const toolInputDisplay = toolInputDisplayRaw ? mapText(toolInputDisplayRaw) : null;
-  const toolInputSummaryRaw = getToolInputSummary(toolName, toolInput) ?? toolInputDisplayRaw;
+  const toolInputSummaryRaw = getToolInputSummary(rawToolName, toolInput) ?? toolInputDisplayRaw;
   const toolInputSummary = toolInputSummaryRaw ? mapText(toolInputSummaryRaw) : null;
   const toolResultDisplayRaw = toolResult ? getToolResultDisplay(toolResult) : '';
   const toolResultDisplay = mapText(toolResultDisplayRaw);
+  const hasToolResultText = hasText(toolResultDisplay);
   const isToolError = Boolean(toolResult?.metadata?.isError || toolResult?.metadata?.error);
+  const showNoDetailError = isToolError && !hasToolResultText;
+  const toolResultFallback = showNoDetailError ? i18nService.t('coworkToolNoErrorDetail') : '';
+  const displayToolResult = hasToolResultText ? toolResultDisplay : toolResultFallback;
   const [isExpanded, setIsExpanded] = useState(false);
-  const resultLineCount = getToolResultLineCount(toolResultDisplay);
+  const resultLineCount = hasToolResultText ? getToolResultLineCount(toolResultDisplay) : 0;
 
   // Check if this is a Bash-like tool that should show terminal style
-  const isBashTool = toolName === 'Bash';
+  const isBashTool = isBashLikeToolName(rawToolName);
 
   return (
     <div className="relative py-1">
@@ -647,9 +726,17 @@ const ToolCallGroup: React.FC<{
               </code>
             )}
           </div>
-          {toolResult && resultLineCount > 0 && !isTodoWriteTool && (
-            <div className="text-xs dark:text-claude-darkTextSecondary/60 text-claude-textSecondary/60 mt-0.5">
-              {resultLineCount} {resultLineCount === 1 ? 'line' : 'lines'} of output
+          {toolResult && !isTodoWriteTool && (hasToolResultText || showNoDetailError) && (
+            <div className={`text-xs mt-0.5 ${
+              hasToolResultText
+                ? 'dark:text-claude-darkTextSecondary/60 text-claude-textSecondary/60'
+                : showNoDetailError
+                  ? 'text-red-500/80'
+                  : 'dark:text-claude-darkTextSecondary/60 text-claude-textSecondary/60'
+            }`}>
+              {hasToolResultText
+                ? `${resultLineCount} ${resultLineCount === 1 ? 'line' : 'lines'} of output`
+                : toolResultFallback}
             </div>
           )}
           {!toolResult && (
@@ -679,11 +766,15 @@ const ToolCallGroup: React.FC<{
                     <span className="whitespace-pre-wrap break-words">{toolInputDisplay}</span>
                   </div>
                 )}
-                {toolResult && toolResultDisplay && (
+                {toolResult && (hasToolResultText || showNoDetailError) && (
                   <div className={`mt-1.5 whitespace-pre-wrap break-words ${
-                    isToolError ? 'text-red-400' : 'dark:text-claude-darkTextSecondary text-claude-textSecondary'
+                    isToolError
+                      ? 'text-red-400'
+                      : hasToolResultText
+                        ? 'dark:text-claude-darkTextSecondary text-claude-textSecondary'
+                        : 'dark:text-claude-darkTextSecondary/70 text-claude-textSecondary/70 italic'
                   }`}>
-                    {toolResultDisplay}
+                    {displayToolResult}
                   </div>
                 )}
                 {!toolResult && (
@@ -710,16 +801,20 @@ const ToolCallGroup: React.FC<{
                   </div>
                 </div>
               )}
-              {toolResult && (
+              {toolResult && (hasToolResultText || showNoDetailError) && (
                 <div>
                   <div className="text-[10px] font-medium dark:text-claude-darkTextSecondary/70 text-claude-textSecondary/70 uppercase tracking-wider mb-1">
                     {i18nService.t('coworkToolResult')}
                   </div>
                   <div className="max-h-64 overflow-y-auto">
                     <pre className={`text-xs whitespace-pre-wrap break-words font-mono ${
-                      isToolError ? 'text-red-500' : 'dark:text-claude-darkText text-claude-text'
+                      isToolError
+                        ? 'text-red-500'
+                        : hasToolResultText
+                          ? 'dark:text-claude-darkText text-claude-text'
+                          : 'dark:text-claude-darkTextSecondary text-claude-textSecondary italic'
                     }`}>
-                      {toolResultDisplay}
+                      {displayToolResult}
                     </pre>
                   </div>
                 </div>
@@ -1070,7 +1165,11 @@ const AssistantTurnBlock: React.FC<{
     const toolResultDisplayRaw = getToolResultDisplay(message);
     const toolResultDisplay = mapDisplayText ? mapDisplayText(toolResultDisplayRaw) : toolResultDisplayRaw;
     const isToolError = Boolean(message.metadata?.isError || message.metadata?.error);
-    const resultLineCount = getToolResultLineCount(toolResultDisplay);
+    const hasToolResultText = hasText(toolResultDisplay);
+    const resultLineCount = hasToolResultText ? getToolResultLineCount(toolResultDisplay) : 0;
+    const showNoDetailError = isToolError && !hasToolResultText;
+    const fallbackText = showNoDetailError ? i18nService.t('coworkToolNoErrorDetail') : '';
+    const displayText = hasToolResultText ? toolResultDisplay : fallbackText;
     return (
       <div className="py-1">
         <div className="flex items-start gap-2">
@@ -1086,13 +1185,28 @@ const AssistantTurnBlock: React.FC<{
                 {resultLineCount} {resultLineCount === 1 ? 'line' : 'lines'} of output
               </div>
             )}
-            <div className="mt-2 px-3 py-2 rounded-lg dark:bg-claude-darkSurface/50 bg-claude-surface/50 max-h-64 overflow-y-auto">
-              <pre className={`text-xs whitespace-pre-wrap break-words font-mono ${
-                isToolError ? 'text-red-500' : 'dark:text-claude-darkText text-claude-text'
+            {resultLineCount === 0 && showNoDetailError && (
+              <div className={`text-xs mt-0.5 ${
+                isToolError
+                  ? 'text-red-500/80'
+                  : 'dark:text-claude-darkTextSecondary/60 text-claude-textSecondary/60'
               }`}>
-                {toolResultDisplay || i18nService.t('coworkToolRunning')}
-              </pre>
-            </div>
+                {fallbackText}
+              </div>
+            )}
+            {(hasToolResultText || showNoDetailError) && (
+              <div className="mt-2 px-3 py-2 rounded-lg dark:bg-claude-darkSurface/50 bg-claude-surface/50 max-h-64 overflow-y-auto">
+                <pre className={`text-xs whitespace-pre-wrap break-words font-mono ${
+                  isToolError
+                    ? 'text-red-500'
+                    : hasToolResultText
+                      ? 'dark:text-claude-darkText text-claude-text'
+                      : 'dark:text-claude-darkTextSecondary text-claude-textSecondary italic'
+                }`}>
+                  {displayText}
+                </pre>
+              </div>
+            )}
           </div>
         </div>
       </div>

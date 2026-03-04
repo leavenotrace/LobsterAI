@@ -1,8 +1,9 @@
 'use strict';
 
 const path = require('path');
-const { existsSync, mkdirSync, readdirSync, statSync } = require('fs');
+const { existsSync, readdirSync, statSync, mkdirSync, readFileSync, rmSync, cpSync } = require('fs');
 const { spawnSync } = require('child_process');
+const asar = require('@electron/asar');
 const { ensurePortableGit } = require('./setup-mingit.js');
 const { ensurePortablePythonRuntime, checkRuntimeHealth } = require('./setup-python-runtime.js');
 
@@ -12,6 +13,144 @@ function isWindowsTarget(context) {
 
 function isMacTarget(context) {
   return context?.electronPlatformName === 'darwin';
+}
+
+function resolveTargetArch(context) {
+  if (context?.arch === 3) return 'arm64';
+  if (context?.arch === 0) return 'ia32';
+  if (context?.arch === 1) return 'x64';
+  if (process.arch === 'arm64') return 'arm64';
+  if (process.arch === 'ia32') return 'ia32';
+  return 'x64';
+}
+
+function resolveOpenClawRuntimeTargetId(context) {
+  const platform = context?.electronPlatformName;
+  const arch = resolveTargetArch(context);
+
+  if (platform === 'darwin') {
+    return arch === 'x64' ? 'mac-x64' : 'mac-arm64';
+  }
+  if (platform === 'win32') {
+    return arch === 'arm64' ? 'win-arm64' : 'win-x64';
+  }
+  if (platform === 'linux') {
+    return arch === 'arm64' ? 'linux-arm64' : 'linux-x64';
+  }
+
+  return null;
+}
+
+function readRuntimeBuildInfo(runtimeRoot) {
+  const buildInfoPath = path.join(runtimeRoot, 'runtime-build-info.json');
+  if (!existsSync(buildInfoPath)) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(readFileSync(buildInfoPath, 'utf8'));
+    return parsed && typeof parsed === 'object' ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function getOpenClawRuntimeBuildHint(targetId) {
+  if (!targetId) {
+    return 'npm run openclaw:runtime:host';
+  }
+  return `npm run openclaw:runtime:${targetId}`;
+}
+
+function syncCurrentOpenClawRuntimeForTarget(context) {
+  const runtimeBase = path.join(__dirname, '..', 'vendor', 'openclaw-runtime');
+  const currentRoot = path.join(runtimeBase, 'current');
+  const targetId = resolveOpenClawRuntimeTargetId(context);
+
+  if (!targetId) {
+    return { runtimeRoot: currentRoot, targetId: null };
+  }
+
+  const targetRoot = path.join(runtimeBase, targetId);
+  if (!existsSync(targetRoot)) {
+    return { runtimeRoot: currentRoot, targetId };
+  }
+
+  const currentBuildInfo = readRuntimeBuildInfo(currentRoot);
+  if (currentBuildInfo?.target !== targetId) {
+    rmSync(currentRoot, { recursive: true, force: true });
+    cpSync(targetRoot, currentRoot, { recursive: true, force: true });
+    console.log(`[electron-builder-hooks] Synced OpenClaw runtime ${targetId} -> current`);
+  }
+
+  return { runtimeRoot: currentRoot, targetId };
+}
+
+function ensureBundledOpenClawRuntime(context) {
+  const { runtimeRoot, targetId } = syncCurrentOpenClawRuntimeForTarget(context);
+  const buildHint = getOpenClawRuntimeBuildHint(targetId);
+
+  const requiredExternalPaths = [
+    path.join(runtimeRoot, 'node_modules'),
+  ];
+  const missingExternal = requiredExternalPaths.filter((candidate) => !existsSync(candidate));
+  if (missingExternal.length > 0) {
+    throw new Error(
+      '[electron-builder-hooks] Bundled OpenClaw runtime is incomplete. Missing: '
+      + missingExternal.join(', ')
+      + `. Run \`${buildHint}\` before packaging.`,
+    );
+  }
+
+  const gatewayAsarPath = path.join(runtimeRoot, 'gateway.asar');
+  if (existsSync(gatewayAsarPath)) {
+    let entries;
+    try {
+      entries = new Set(asar.listPackage(gatewayAsarPath));
+    } catch (error) {
+      throw new Error(
+        '[electron-builder-hooks] Failed to read OpenClaw gateway.asar: '
+        + `${gatewayAsarPath}. ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+
+    const hasOpenClawEntry = entries.has('/openclaw.mjs');
+    const hasControlUiIndex = entries.has('/dist/control-ui/index.html');
+    const hasGatewayEntry = entries.has('/dist/entry.js') || entries.has('/dist/entry.mjs');
+
+    if (!hasOpenClawEntry || !hasControlUiIndex || !hasGatewayEntry) {
+      throw new Error(
+        '[electron-builder-hooks] OpenClaw gateway.asar is incomplete. '
+        + `openclaw.mjs=${hasOpenClawEntry}, control-ui=${hasControlUiIndex}, entry=${hasGatewayEntry}.`,
+      );
+    }
+
+    return;
+  }
+
+  const legacyRequiredPaths = [
+    path.join(runtimeRoot, 'openclaw.mjs'),
+    path.join(runtimeRoot, 'dist', 'control-ui', 'index.html'),
+  ];
+
+  const hasLegacyEntry = existsSync(path.join(runtimeRoot, 'dist', 'entry.js'))
+    || existsSync(path.join(runtimeRoot, 'dist', 'entry.mjs'));
+  if (!hasLegacyEntry) {
+    throw new Error(
+      '[electron-builder-hooks] Missing OpenClaw runtime entry. '
+      + `Expected ${path.join(runtimeRoot, 'dist', 'entry.js')} or ${path.join(runtimeRoot, 'dist', 'entry.mjs')}, `
+      + `or ${path.join(runtimeRoot, 'gateway.asar')}.`,
+    );
+  }
+
+  const missingLegacy = legacyRequiredPaths.filter((candidate) => !existsSync(candidate));
+  if (missingLegacy.length > 0) {
+    throw new Error(
+      '[electron-builder-hooks] Bundled OpenClaw legacy runtime is incomplete. Missing: '
+      + missingLegacy.join(', ')
+      + `. Run \`${buildHint}\` before packaging.`,
+    );
+  }
 }
 
 function findPackagedBash(appOutDir) {
@@ -313,6 +452,7 @@ function installSkillDependencies() {
 }
 
 async function beforePack(context) {
+  ensureBundledOpenClawRuntime(context);
   // Install skill dependencies first (for all platforms)
   installSkillDependencies();
 

@@ -2,9 +2,7 @@ import { app } from 'electron';
 import { execSync, spawnSync } from 'child_process';
 import { existsSync, mkdirSync, writeFileSync, chmodSync } from 'fs';
 import { delimiter, dirname, join } from 'path';
-import type { SDKResultMessage } from '@anthropic-ai/claude-agent-sdk';
-import { loadClaudeSdk } from './claudeSdk';
-import { buildEnvForConfig, getClaudeCodePath, getCurrentApiConfig } from './claudeSettings';
+import { buildEnvForConfig, getCurrentApiConfig } from './claudeSettings';
 import type { OpenAICompatProxyTarget } from './coworkOpenAICompatProxy';
 import { getInternalApiBaseURL } from './coworkOpenAICompatProxy';
 import { coworkLog } from './coworkLogger';
@@ -1050,50 +1048,129 @@ export async function getEnhancedEnvWithTmpdir(
   return env;
 }
 
-export async function generateSessionTitle(userIntent: string | null): Promise<string> {
-  if (!userIntent) return 'New Session';
+const SESSION_TITLE_MAX_CHARS = 50;
+const SESSION_TITLE_TIMEOUT_MS = 6000;
 
-  const claudeCodePath = getClaudeCodePath();
-  const currentEnv = await getEnhancedEnv();
+function buildAnthropicMessagesUrl(baseURL: string): string {
+  const normalized = baseURL.replace(/\/+$/, '');
+  if (!normalized) {
+    return '/v1/messages';
+  }
+  if (normalized.endsWith('/v1/messages')) {
+    return normalized;
+  }
+  if (normalized.endsWith('/v1')) {
+    return `${normalized}/messages`;
+  }
+  return `${normalized}/v1/messages`;
+}
 
-  // Ensure child_process.fork() runs cli.js as Node, not as another Electron app
-  if (app.isPackaged) {
-    currentEnv.ELECTRON_RUN_AS_NODE = '1';
+function extractTextFromAnthropicResponse(payload: unknown): string {
+  if (!payload || typeof payload !== 'object') {
+    return '';
   }
 
+  const record = payload as Record<string, unknown>;
+  if (typeof record.output_text === 'string') {
+    return record.output_text.trim();
+  }
+
+  const content = record.content;
+  if (Array.isArray(content)) {
+    return content
+      .map((item) => {
+        if (!item || typeof item !== 'object') return '';
+        const block = item as Record<string, unknown>;
+        if (block.type !== 'text') return '';
+        return typeof block.text === 'string' ? block.text : '';
+      })
+      .filter(Boolean)
+      .join('\n')
+      .trim();
+  }
+
+  if (typeof content === 'string') {
+    return content.trim();
+  }
+
+  return '';
+}
+
+function buildFallbackSessionTitle(userIntent: string): string {
+  const normalized = userIntent.trim();
+  if (!normalized) return 'New Session';
+
+  const firstLine = normalized
+    .split('\n')
+    .map((line) => line.trim())
+    .find((line) => line.length > 0) || normalized;
+  const truncated = firstLine.slice(0, SESSION_TITLE_MAX_CHARS);
+
+  return truncated || 'New Session';
+}
+
+function normalizeSessionTitle(rawTitle: string, fallbackTitle: string): string {
+  const singleLine = rawTitle
+    .replace(/\r/g, '')
+    .split('\n')
+    .map((line) => line.trim())
+    .find((line) => line.length > 0) || '';
+
+  const withoutMarkdownHeading = singleLine.replace(/^#{1,6}\s+/, '');
+  const withoutQuotes = withoutMarkdownHeading.replace(/^["'`“”‘’]+|["'`“”‘’]+$/g, '').trim();
+  if (!withoutQuotes) {
+    return fallbackTitle;
+  }
+  return withoutQuotes.slice(0, SESSION_TITLE_MAX_CHARS);
+}
+
+export async function generateSessionTitle(userIntent: string | null): Promise<string> {
+  const normalizedIntent = userIntent?.trim() || '';
+  if (!normalizedIntent) {
+    return 'New Session';
+  }
+
+  const fallbackTitle = buildFallbackSessionTitle(normalizedIntent);
+  const apiConfig = getCurrentApiConfig();
+  if (!apiConfig) {
+    return fallbackTitle;
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), SESSION_TITLE_TIMEOUT_MS);
+
   try {
-    const { unstable_v2_prompt } = await loadClaudeSdk();
-    const promptOptions: Record<string, unknown> = {
-      model: getCurrentApiConfig()?.model || 'claude-sonnet',
-      env: currentEnv,
-      pathToClaudeCodeExecutable: claudeCodePath,
-    };
+    const response = await fetch(buildAnthropicMessagesUrl(apiConfig.baseURL), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiConfig.apiKey,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model: apiConfig.model,
+        max_tokens: 80,
+        temperature: 0,
+        system:
+          'Generate a short conversation title in the same language as the user input. '
+          + `Output only the title, one line, max ${SESSION_TITLE_MAX_CHARS} characters, no quotes.`,
+        messages: [{ role: 'user', content: normalizedIntent }],
+      }),
+      signal: controller.signal,
+    });
 
-    const result: SDKResultMessage = await unstable_v2_prompt(
-      `Generate a short, clear title (max 50 chars) for this conversation based on the user input below.
-IMPORTANT: The title MUST be in the SAME language as the user input. If user writes in Chinese, output Chinese title. If user writes in English, output English title.
-User input: ${userIntent}
-Output only the title, nothing else.`,
-      promptOptions as any
-    );
-
-    if (result.subtype === 'success') {
-      return result.result;
+    if (!response.ok) {
+      console.error('Failed to generate session title via LLM:', response.status, response.statusText);
+      return fallbackTitle;
     }
 
-    console.error('Claude SDK returned non-success result:', result);
-    return 'New Session';
+    const payload = await response.json();
+    const titleText = extractTextFromAnthropicResponse(payload);
+    return normalizeSessionTitle(titleText, fallbackTitle);
   } catch (error) {
     console.error('Failed to generate session title:', error);
-    console.error('Claude Code path:', claudeCodePath);
-    console.error('Is packaged:', app.isPackaged);
-    console.error('Resources path:', process.resourcesPath);
-
-    if (userIntent) {
-      const words = userIntent.trim().split(/\s+/).slice(0, 5);
-      return words.join(' ').toUpperCase() + (userIntent.trim().split(/\s+/).length > 5 ? '...' : '');
-    }
-
-    return 'New Session';
+    return fallbackTitle;
+  } finally {
+    clearTimeout(timeout);
   }
 }
