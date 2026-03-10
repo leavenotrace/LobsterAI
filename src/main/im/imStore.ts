@@ -7,7 +7,7 @@ import { Database } from 'sql.js';
 import {
   IMGatewayConfig,
   DingTalkConfig,
-  FeishuConfig,
+  FeishuOpenClawConfig,
   TelegramOpenClawConfig,
   QQConfig,
   DiscordOpenClawConfig,
@@ -18,7 +18,7 @@ import {
   IMPlatform,
   IMSessionMapping,
   DEFAULT_DINGTALK_CONFIG,
-  DEFAULT_FEISHU_CONFIG,
+  DEFAULT_FEISHU_OPENCLAW_CONFIG,
   DEFAULT_TELEGRAM_OPENCLAW_CONFIG,
   DEFAULT_QQ_CONFIG,
   DEFAULT_DISCORD_OPENCLAW_CONFIG,
@@ -114,7 +114,7 @@ export class IMStore {
     const feishuResult = this.db.exec('SELECT value FROM im_config WHERE key = ?', ['feishu']);
     if (feishuResult[0]?.values[0]) {
       try {
-        const feishuConfig = JSON.parse(feishuResult[0].values[0][0] as string) as Partial<FeishuConfig>;
+        const feishuConfig = JSON.parse(feishuResult[0].values[0][0] as string) as Partial<{ renderMode: string }>;
         if (feishuConfig.renderMode === 'text') {
           feishuConfig.renderMode = 'card';
           const now = Date.now();
@@ -195,6 +195,35 @@ export class IMStore {
       }
     }
 
+    // Migrate old native Feishu config to new OpenClaw format
+    const oldFeishuResult2 = this.db.exec('SELECT value FROM im_config WHERE key = ?', ['feishu']);
+    const newFeishuResult = this.db.exec('SELECT value FROM im_config WHERE key = ?', ['feishuOpenClaw']);
+    if (oldFeishuResult2[0]?.values[0] && !newFeishuResult[0]?.values[0]) {
+      try {
+        const oldConfig = JSON.parse(oldFeishuResult2[0].values[0][0] as string) as Partial<{ enabled: boolean; appId: string; appSecret: string; domain: string; debug: boolean }>;
+        if (oldConfig.appId) {
+          const newConfig: FeishuOpenClawConfig = {
+            ...DEFAULT_FEISHU_OPENCLAW_CONFIG,
+            enabled: oldConfig.enabled ?? false,
+            appId: oldConfig.appId,
+            appSecret: oldConfig.appSecret ?? '',
+            domain: oldConfig.domain || 'feishu',
+            debug: oldConfig.debug ?? true,
+          };
+          const now = Date.now();
+          this.db.run(
+            'INSERT OR REPLACE INTO im_config (key, value, updated_at) VALUES (?, ?, ?)',
+            ['feishuOpenClaw', JSON.stringify(newConfig), now]
+          );
+          this.db.run('DELETE FROM im_config WHERE key = ?', ['feishu']);
+          changed = true;
+          console.log('[IMStore] Migrated old Feishu config to OpenClaw format');
+        }
+      } catch {
+        // Ignore parse errors
+      }
+    }
+
     if (changed) {
       this.saveDb();
     }
@@ -230,7 +259,7 @@ export class IMStore {
 
   getConfig(): IMGatewayConfig {
     const dingtalk = this.getConfigValue<DingTalkConfig>('dingtalk') ?? DEFAULT_DINGTALK_CONFIG;
-    const feishu = this.getConfigValue<FeishuConfig>('feishu') ?? DEFAULT_FEISHU_CONFIG;
+    const feishu = this.getConfigValue<FeishuOpenClawConfig>('feishuOpenClaw') ?? DEFAULT_FEISHU_OPENCLAW_CONFIG;
     const telegram = this.getConfigValue<TelegramOpenClawConfig>('telegramOpenClaw') ?? DEFAULT_TELEGRAM_OPENCLAW_CONFIG;
     const discord = this.getConfigValue<DiscordOpenClawConfig>('discordOpenClaw') ?? DEFAULT_DISCORD_OPENCLAW_CONFIG;
     const nim = this.getConfigValue<NimConfig>('nim') ?? DEFAULT_NIM_CONFIG;
@@ -252,7 +281,7 @@ export class IMStore {
 
     return {
       dingtalk: resolveEnabled(dingtalk, DEFAULT_DINGTALK_CONFIG),
-      feishu: resolveEnabled(feishu, DEFAULT_FEISHU_CONFIG),
+      feishu: resolveEnabled(feishu, DEFAULT_FEISHU_OPENCLAW_CONFIG),
       telegram: resolveEnabled(telegram, DEFAULT_TELEGRAM_OPENCLAW_CONFIG),
       discord: resolveEnabled(discord, DEFAULT_DISCORD_OPENCLAW_CONFIG),
       nim: resolveEnabled(nim, DEFAULT_NIM_CONFIG),
@@ -268,7 +297,7 @@ export class IMStore {
       this.setDingTalkConfig(config.dingtalk);
     }
     if (config.feishu) {
-      this.setFeishuConfig(config.feishu);
+      this.setFeishuOpenClawConfig(config.feishu);
     }
     if (config.telegram) {
       this.setTelegramOpenClawConfig(config.telegram);
@@ -305,16 +334,16 @@ export class IMStore {
     this.setConfigValue('dingtalk', { ...current, ...config });
   }
 
-  // ==================== Feishu Config ====================
+  // ==================== Feishu OpenClaw Config ====================
 
-  getFeishuConfig(): FeishuConfig {
-    const stored = this.getConfigValue<FeishuConfig>('feishu');
-    return { ...DEFAULT_FEISHU_CONFIG, ...stored };
+  getFeishuOpenClawConfig(): FeishuOpenClawConfig {
+    const stored = this.getConfigValue<FeishuOpenClawConfig>('feishuOpenClaw');
+    return { ...DEFAULT_FEISHU_OPENCLAW_CONFIG, ...stored };
   }
 
-  setFeishuConfig(config: Partial<FeishuConfig>): void {
-    const current = this.getFeishuConfig();
-    this.setConfigValue('feishu', { ...current, ...config });
+  setFeishuOpenClawConfig(config: Partial<FeishuOpenClawConfig>): void {
+    const current = this.getFeishuOpenClawConfig();
+    this.setConfigValue('feishuOpenClaw', { ...current, ...config });
   }
 
   // ==================== Discord OpenClaw Config ====================

@@ -20,6 +20,12 @@ import { generateSessionTitle, probeCoworkModelReadiness } from './libs/coworkUt
 import { ensureSandboxReady, getSandboxStatus, onSandboxProgress } from './libs/coworkSandboxRuntime';
 import { startCoworkOpenAICompatProxy, stopCoworkOpenAICompatProxy, setScheduledTaskDeps } from './libs/coworkOpenAICompatProxy';
 import { OpenClawEngineManager, type OpenClawEngineStatus } from './libs/openclawEngineManager';
+import {
+  listPairingRequests,
+  approvePairingCode,
+  rejectPairingRequest,
+  readAllowFromStore,
+} from './im/imPairingStore';
 import { OpenClawConfigSync } from './libs/openclawConfigSync';
 import { OpenClawChannelSessionSync } from './libs/openclawChannelSessionSync';
 import { IMGatewayManager, IMPlatform, IMGatewayConfig } from './im';
@@ -2320,7 +2326,13 @@ if (!gotTheLock) {
       }
       // Re-sync OpenClaw config so feishu-openclaw-plugin picks up new credentials
       if (config.feishu) {
-        void syncOpenClawConfig({ reason: 'im-feishu-config-change', restartGatewayIfRunning: false });
+        const engineManager = getOpenClawEngineManager();
+        if (engineManager.getStatus().phase === 'running') {
+          await syncOpenClawConfig({
+            reason: 'feishu-openclaw-config-change',
+            restartGatewayIfRunning: true,
+          });
+        }
       }
       // Re-sync OpenClaw config so qqbot plugin picks up new credentials
       if (config.qq) {
@@ -2393,6 +2405,62 @@ if (!gotTheLock) {
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Failed to get IM status',
+      };
+    }
+  });
+
+  // ---- Pairing IPC handlers ----
+
+  ipcMain.handle('im:pairing:list', async (_event, platform: string) => {
+    try {
+      const stateDir = getOpenClawEngineManager().getStateDir();
+      const requests = listPairingRequests(platform, stateDir);
+      const allowFrom = readAllowFromStore(platform, stateDir);
+      return { success: true, requests, allowFrom };
+    } catch (error) {
+      return {
+        success: false,
+        requests: [],
+        allowFrom: [],
+        error: error instanceof Error ? error.message : 'Failed to list pairing requests',
+      };
+    }
+  });
+
+  ipcMain.handle('im:pairing:approve', async (_event, platform: string, code: string) => {
+    try {
+      const stateDir = getOpenClawEngineManager().getStateDir();
+      const approved = approvePairingCode(platform, code, stateDir);
+      if (!approved) {
+        return { success: false, error: 'Pairing code not found or expired' };
+      }
+      // Restart gateway so it reloads the updated allowFrom from disk
+      // (OpenClaw SDK caches allowFrom in memory)
+      await syncOpenClawConfig({
+        reason: `im-pairing-approval:${platform}`,
+        restartGatewayIfRunning: true,
+      });
+      return { success: true };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to approve pairing code',
+      };
+    }
+  });
+
+  ipcMain.handle('im:pairing:reject', async (_event, platform: string, code: string) => {
+    try {
+      const stateDir = getOpenClawEngineManager().getStateDir();
+      const rejected = rejectPairingRequest(platform, code, stateDir);
+      if (!rejected) {
+        return { success: false, error: 'Pairing code not found or expired' };
+      }
+      return { success: true };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to reject pairing request',
       };
     }
   });

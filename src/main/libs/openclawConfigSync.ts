@@ -3,7 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import type { CoworkConfig, CoworkExecutionMode } from '../coworkStore';
 import type { TelegramOpenClawConfig, DiscordOpenClawConfig } from '../im/types';
-import type { DingTalkConfig, FeishuConfig, QQConfig, WecomConfig } from '../im/types';
+import type { DingTalkConfig, FeishuOpenClawConfig, QQConfig, WecomConfig } from '../im/types';
 import { resolveRawApiConfig } from './claudeSettings';
 import type { OpenClawEngineManager } from './openclawEngineManager';
 
@@ -55,7 +55,7 @@ type OpenClawConfigSyncDeps = {
   getTelegramOpenClawConfig?: () => TelegramOpenClawConfig | null;
   getDiscordOpenClawConfig?: () => DiscordOpenClawConfig | null;
   getDingTalkConfig: () => DingTalkConfig | null;
-  getFeishuConfig: () => FeishuConfig | null;
+  getFeishuConfig: () => FeishuOpenClawConfig | null;
   getQQConfig: () => QQConfig | null;
   getWecomConfig: () => WecomConfig | null;
 };
@@ -66,7 +66,7 @@ export class OpenClawConfigSync {
   private readonly getTelegramOpenClawConfig?: () => TelegramOpenClawConfig | null;
   private readonly getDiscordOpenClawConfig?: () => DiscordOpenClawConfig | null;
   private readonly getDingTalkConfig: () => DingTalkConfig | null;
-  private readonly getFeishuConfig: () => FeishuConfig | null;
+  private readonly getFeishuConfig: () => FeishuOpenClawConfig | null;
   private readonly getQQConfig: () => QQConfig | null;
   private readonly getWecomConfig: () => WecomConfig | null;
 
@@ -121,7 +121,8 @@ export class OpenClawConfigSync {
       : '';
 
     const feishuConfig = this.getFeishuConfig();
-    const hasFeishu = feishuConfig?.enabled && feishuConfig.appId;
+    // Feishu now runs fully through OpenClaw plugin, handled separately below like Telegram
+    const hasFeishu = false; // Legacy in-line feishu channel disabled; OpenClaw plugin used instead
 
     const qqConfig = this.getQQConfig();
     const hasQQ = qqConfig?.enabled && qqConfig.appId;
@@ -129,7 +130,7 @@ export class OpenClawConfigSync {
     const wecomConfig = this.getWecomConfig();
     const hasWecom = wecomConfig?.enabled && wecomConfig.botId;
 
-    const hasAnyChannel = hasDingTalk || hasFeishu || hasQQ || hasWecom;
+    const hasAnyChannel = hasDingTalk || hasQQ || hasWecom;
 
     const managedConfig: Record<string, unknown> = {
       gateway: {
@@ -197,38 +198,6 @@ export class OpenClawConfigSync {
             clientId: dingTalkConfig.clientId,
             clientSecret: dingTalkConfig.clientSecret,
             ...(gatewayToken ? { gatewayToken } : {}),
-          },
-          ...(hasFeishu ? {
-            feishu: {
-              enabled: true,
-              appId: feishuConfig.appId,
-              appSecret: feishuConfig.appSecret,
-              domain: feishuConfig.domain || 'feishu',
-            },
-          } : {}),
-          ...(hasQQ ? {
-            qqbot: {
-              enabled: true,
-              appId: qqConfig.appId,
-              clientSecret: qqConfig.appSecret,
-            },
-          } : {}),
-          ...(hasWecom ? {
-            wecom: {
-              enabled: true,
-              botId: wecomConfig.botId,
-              secret: wecomConfig.secret,
-              dmPolicy: 'open',
-            },
-          } : {}),
-        },
-      } : hasFeishu ? {
-        channels: {
-          feishu: {
-            enabled: true,
-            appId: feishuConfig.appId,
-            appSecret: feishuConfig.appSecret,
-            domain: feishuConfig.domain || 'feishu',
           },
           ...(hasQQ ? {
             qqbot: {
@@ -361,6 +330,37 @@ export class OpenClawConfigSync {
       managedConfig.channels = { ...(managedConfig.channels as Record<string, unknown> || {}), discord: discordChannel };
     } else if (dcConfig) {
       managedConfig.channels = { ...(managedConfig.channels as Record<string, unknown> || {}), discord: { enabled: false } };
+    }
+
+    // Sync Feishu OpenClaw channel config (via feishu-openclaw-plugin)
+    if (feishuConfig?.enabled && feishuConfig.appId) {
+      const feishuChannel: Record<string, unknown> = {
+        enabled: true,
+        appId: feishuConfig.appId,
+        appSecret: feishuConfig.appSecret,
+        domain: feishuConfig.domain || 'feishu',
+        dmPolicy: feishuConfig.dmPolicy || 'pairing',
+        allowFrom: (() => {
+          const ids = feishuConfig.allowFrom?.length ? [...feishuConfig.allowFrom] : [];
+          if (feishuConfig.dmPolicy === 'open' && !ids.includes('*')) ids.push('*');
+          return ids;
+        })(),
+        groupPolicy: feishuConfig.groupPolicy || 'allowlist',
+        groupAllowFrom: (() => {
+          const ids = feishuConfig.groupAllowFrom?.length ? [...feishuConfig.groupAllowFrom] : [];
+          if (feishuConfig.groupPolicy === 'open' && !ids.includes('*')) ids.push('*');
+          return ids;
+        })(),
+        groups: feishuConfig.groups && Object.keys(feishuConfig.groups).length > 0
+          ? feishuConfig.groups
+          : { '*': { requireMention: true } },
+        historyLimit: feishuConfig.historyLimit || 50,
+        replyMode: feishuConfig.replyMode || 'auto',
+        mediaMaxMb: feishuConfig.mediaMaxMb || 30,
+      };
+      managedConfig.channels = { ...(managedConfig.channels as Record<string, unknown> || {}), feishu: feishuChannel };
+    } else if (feishuConfig) {
+      managedConfig.channels = { ...(managedConfig.channels as Record<string, unknown> || {}), feishu: { enabled: false } };
     }
 
     const nextContent = `${JSON.stringify(managedConfig, null, 2)}\n`;

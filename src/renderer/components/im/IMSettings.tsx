@@ -11,7 +11,7 @@ import { RootState } from '../../store';
 import { imService } from '../../services/im';
 import { setDingTalkConfig, setFeishuConfig, setTelegramOpenClawConfig, setQQConfig, setDiscordConfig, setNimConfig, setXiaomifengConfig, setWecomConfig, clearError } from '../../store/slices/imSlice';
 import { i18nService } from '../../services/i18n';
-import type { IMPlatform, IMConnectivityCheck, IMConnectivityTestResult, IMGatewayConfig, TelegramOpenClawConfig, DiscordOpenClawConfig } from '../../types/im';
+import type { IMPlatform, IMConnectivityCheck, IMConnectivityTestResult, IMGatewayConfig, TelegramOpenClawConfig, DiscordOpenClawConfig, FeishuOpenClawConfig } from '../../types/im';
 import { getVisibleIMPlatforms } from '../../utils/regionFilter';
 
 // Platform metadata
@@ -109,11 +109,36 @@ const IMSettings: React.FC = () => {
     dispatch(setDingTalkConfig({ [field]: value }));
   };
 
-  // Handle Feishu config change
-  const handleFeishuChange = (field: 'appId' | 'appSecret', value: string) => {
-    dispatch(setFeishuConfig({ [field]: value }));
+  // Handle Feishu OpenClaw config change
+  const fsOpenClawConfig = config.feishu;
+  const handleFeishuOpenClawChange = (update: Partial<FeishuOpenClawConfig>) => {
+    dispatch(setFeishuConfig(update));
+  };
+  const handleSaveFeishuOpenClawConfig = async (override?: Partial<FeishuOpenClawConfig>) => {
+    if (!configLoaded) return;
+    const configToSave = override
+      ? { ...fsOpenClawConfig, ...override }
+      : fsOpenClawConfig;
+    await imService.updateConfig({ feishu: configToSave });
   };
 
+  // State for Feishu allow-from inputs
+  const [feishuAllowedUserIdInput, setFeishuAllowedUserIdInput] = useState('');
+  const [feishuGroupAllowIdInput, setFeishuGroupAllowIdInput] = useState('');
+
+  // Pairing state for OpenClaw platforms
+  const [pairingCodeInput, setPairingCodeInput] = useState<Record<string, string>>({});
+  const [pairingStatus, setPairingStatus] = useState<Record<string, { type: 'success' | 'error'; message: string } | null>>({});
+
+  const handleApprovePairing = async (platform: string, code: string) => {
+    setPairingStatus((prev) => ({ ...prev, [platform]: null }));
+    const result = await imService.approvePairingCode(platform, code);
+    if (result.success) {
+      setPairingStatus((prev) => ({ ...prev, [platform]: { type: 'success', message: `配对码 ${code} 已批准` } }));
+    } else {
+      setPairingStatus((prev) => ({ ...prev, [platform]: { type: 'error', message: result.error || '配对码无效或已过期' } }));
+    }
+  };
   // Handle Telegram OpenClaw config change
   const tgOpenClawConfig = config.telegram;
   const handleTelegramOpenClawChange = (update: Partial<TelegramOpenClawConfig>) => {
@@ -186,6 +211,12 @@ const IMSettings: React.FC = () => {
     // For Discord, save discord config directly
     if (activePlatform === 'discord') {
       await imService.updateConfig({ discord: dcOpenClawConfig });
+      return;
+    }
+
+    // For Feishu, save feishu config directly
+    if (activePlatform === 'feishu') {
+      await imService.updateConfig({ feishu: fsOpenClawConfig });
       return;
     }
 
@@ -279,6 +310,25 @@ const IMSettings: React.FC = () => {
           if (!success) {
             dispatch(setTelegramOpenClawConfig({ enabled: false }));
             await imService.updateConfig({ telegram: { ...tgOpenClawConfig, enabled: false } });
+          }
+        } else {
+          await imService.stopGateway(platform);
+        }
+        return;
+      }
+
+      // Feishu has a separate config path (OpenClaw mode)
+      if (platform === 'feishu') {
+        const newEnabled = !fsOpenClawConfig.enabled;
+        dispatch(setFeishuConfig({ enabled: newEnabled }));
+        await imService.updateConfig({ feishu: { ...fsOpenClawConfig, enabled: newEnabled } });
+
+        if (newEnabled) {
+          dispatch(clearError());
+          const success = await imService.startGateway(platform);
+          if (!success) {
+            dispatch(setFeishuConfig({ enabled: false }));
+            await imService.updateConfig({ feishu: { ...fsOpenClawConfig, enabled: false } });
           }
         } else {
           await imService.stopGateway(platform);
@@ -404,6 +454,15 @@ const IMSettings: React.FC = () => {
       return;
     }
 
+    // For Feishu, persist feishu config and test (OpenClaw mode)
+    if (platform === 'feishu') {
+      await imService.updateConfig({ feishu: fsOpenClawConfig });
+      await runConnectivityTest(platform, {
+        feishu: fsOpenClawConfig,
+      } as Partial<IMGatewayConfig>);
+      return;
+    }
+
     // 1. Persist latest config to backend (without changing enabled state)
     await imService.updateConfig({
       [platform]: config[platform],
@@ -498,6 +557,57 @@ const IMSettings: React.FC = () => {
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [connectivityModalPlatform]);
+
+  const renderPairingSection = (platform: string) => (
+    <div className="space-y-2">
+      <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+        配对码审批
+      </label>
+      <div className="flex gap-2">
+        <input
+          type="text"
+          value={pairingCodeInput[platform] || ''}
+          onChange={(e) => {
+            setPairingCodeInput((prev) => ({ ...prev, [platform]: e.target.value.toUpperCase() }));
+            if (pairingStatus[platform]) setPairingStatus((prev) => ({ ...prev, [platform]: null }));
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              const code = (pairingCodeInput[platform] || '').trim();
+              if (code) {
+                void handleApprovePairing(platform, code).then(() => {
+                  setPairingCodeInput((prev) => ({ ...prev, [platform]: '' }));
+                });
+              }
+            }
+          }}
+          className="block flex-1 rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-sm font-mono uppercase tracking-widest transition-colors"
+          placeholder="输入配对码"
+          maxLength={8}
+        />
+        <button
+          type="button"
+          onClick={() => {
+            const code = (pairingCodeInput[platform] || '').trim();
+            if (code) {
+              void handleApprovePairing(platform, code).then(() => {
+                setPairingCodeInput((prev) => ({ ...prev, [platform]: '' }));
+              });
+            }
+          }}
+          className="px-3 py-2 rounded-lg text-xs font-medium bg-green-500/15 text-green-600 dark:text-green-400 hover:bg-green-500/25 transition-colors"
+        >
+          批准
+        </button>
+      </div>
+      {pairingStatus[platform] && (
+        <p className={`text-xs ${pairingStatus[platform]!.type === 'success' ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
+          {pairingStatus[platform]!.type === 'success' ? '\u2713' : '\u2717'} {pairingStatus[platform]!.message}
+        </p>
+      )}
+    </div>
+  );
 
   return (
     <div className="flex h-full gap-4">
@@ -680,17 +790,17 @@ const IMSettings: React.FC = () => {
               <div className="relative">
                 <input
                   type="text"
-                  value={config.feishu.appId}
-                  onChange={(e) => handleFeishuChange('appId', e.target.value)}
-                  onBlur={handleSaveConfig}
+                  value={fsOpenClawConfig.appId}
+                  onChange={(e) => handleFeishuOpenClawChange({ appId: e.target.value })}
+                  onBlur={() => handleSaveFeishuOpenClawConfig()}
                   className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 pr-8 text-sm transition-colors"
                   placeholder="cli_xxxxx"
                 />
-                {config.feishu.appId && (
+                {fsOpenClawConfig.appId && (
                   <div className="absolute right-2 inset-y-0 flex items-center">
                     <button
                       type="button"
-                      onClick={() => { handleFeishuChange('appId', ''); void imService.updateConfig({ feishu: { ...config.feishu, appId: '' } }); }}
+                      onClick={() => { handleFeishuOpenClawChange({ appId: '' }); void imService.updateConfig({ feishu: { ...fsOpenClawConfig, appId: '' } }); }}
                       className="p-0.5 rounded text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent transition-colors"
                       title={i18nService.t('clear') || 'Clear'}
                     >
@@ -709,17 +819,17 @@ const IMSettings: React.FC = () => {
               <div className="relative">
                 <input
                   type={showSecrets['feishu.appSecret'] ? 'text' : 'password'}
-                  value={config.feishu.appSecret}
-                  onChange={(e) => handleFeishuChange('appSecret', e.target.value)}
-                  onBlur={handleSaveConfig}
+                  value={fsOpenClawConfig.appSecret}
+                  onChange={(e) => handleFeishuOpenClawChange({ appSecret: e.target.value })}
+                  onBlur={() => handleSaveFeishuOpenClawConfig()}
                   className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 pr-16 text-sm transition-colors"
                   placeholder="••••••••••••"
                 />
                 <div className="absolute right-2 inset-y-0 flex items-center gap-1">
-                  {config.feishu.appSecret && (
+                  {fsOpenClawConfig.appSecret && (
                     <button
                       type="button"
-                      onClick={() => { handleFeishuChange('appSecret', ''); void imService.updateConfig({ feishu: { ...config.feishu, appSecret: '' } }); }}
+                      onClick={() => { handleFeishuOpenClawChange({ appSecret: '' }); void imService.updateConfig({ feishu: { ...fsOpenClawConfig, appSecret: '' } }); }}
                       className="p-0.5 rounded text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-claude-accent transition-colors"
                       title={i18nService.t('clear') || 'Clear'}
                     >
@@ -737,6 +847,261 @@ const IMSettings: React.FC = () => {
                 </div>
               </div>
             </div>
+
+            {/* Domain */}
+            <div className="space-y-1.5">
+              <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                Domain
+              </label>
+              <select
+                value={fsOpenClawConfig.domain}
+                onChange={(e) => {
+                  const update = { domain: e.target.value };
+                  handleFeishuOpenClawChange(update);
+                  void handleSaveFeishuOpenClawConfig(update);
+                }}
+                className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-sm transition-colors"
+              >
+                <option value="feishu">飞书 (feishu.cn)</option>
+                <option value="lark">Lark (larksuite.com)</option>
+              </select>
+            </div>
+
+            {/* Advanced Settings (collapsible) */}
+            <details className="group">
+              <summary className="cursor-pointer text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary hover:text-claude-accent transition-colors">
+                高级设置
+              </summary>
+              <div className="mt-2 space-y-3 pl-2 border-l-2 border-claude-border/30 dark:border-claude-darkBorder/30">
+                {/* DM Policy */}
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                    DM Policy
+                  </label>
+                  <select
+                    value={fsOpenClawConfig.dmPolicy}
+                    onChange={(e) => {
+                      const update = { dmPolicy: e.target.value as FeishuOpenClawConfig['dmPolicy'] };
+                      handleFeishuOpenClawChange(update);
+                      void handleSaveFeishuOpenClawConfig(update);
+                    }}
+                    className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-sm transition-colors"
+                  >
+                    <option value="pairing">Pairing（配对码验证）</option>
+                    <option value="allowlist">Allowlist（白名单）</option>
+                    <option value="open">Open（开放）</option>
+                    <option value="disabled">Disabled（禁用 DM）</option>
+                  </select>
+                </div>
+
+                {/* Pairing Requests (shown when dmPolicy is 'pairing') */}
+                {fsOpenClawConfig.dmPolicy === 'pairing' && renderPairingSection('feishu')}
+
+                {/* Allow From (User IDs) */}
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                    Allow From (User IDs)
+                  </label>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={feishuAllowedUserIdInput}
+                      onChange={(e) => setFeishuAllowedUserIdInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          const id = feishuAllowedUserIdInput.trim();
+                          if (id && !fsOpenClawConfig.allowFrom.includes(id)) {
+                            const newIds = [...fsOpenClawConfig.allowFrom, id];
+                            handleFeishuOpenClawChange({ allowFrom: newIds });
+                            setFeishuAllowedUserIdInput('');
+                            void imService.updateConfig({ feishu: { ...fsOpenClawConfig, allowFrom: newIds } });
+                          }
+                        }
+                      }}
+                      className="block flex-1 rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-sm transition-colors"
+                      placeholder="输入飞书 User ID"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const id = feishuAllowedUserIdInput.trim();
+                        if (id && !fsOpenClawConfig.allowFrom.includes(id)) {
+                          const newIds = [...fsOpenClawConfig.allowFrom, id];
+                          handleFeishuOpenClawChange({ allowFrom: newIds });
+                          setFeishuAllowedUserIdInput('');
+                          void imService.updateConfig({ feishu: { ...fsOpenClawConfig, allowFrom: newIds } });
+                        }
+                      }}
+                      className="px-3 py-2 rounded-lg text-xs font-medium bg-claude-accent/10 text-claude-accent hover:bg-claude-accent/20 transition-colors"
+                    >
+                      {i18nService.t('add') || '添加'}
+                    </button>
+                  </div>
+                  {fsOpenClawConfig.allowFrom.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5 mt-1.5">
+                      {fsOpenClawConfig.allowFrom.map((id) => (
+                        <span
+                          key={id}
+                          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border dark:text-claude-darkText text-claude-text"
+                        >
+                          {id}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const newIds = fsOpenClawConfig.allowFrom.filter((uid) => uid !== id);
+                              handleFeishuOpenClawChange({ allowFrom: newIds });
+                              void imService.updateConfig({ feishu: { ...fsOpenClawConfig, allowFrom: newIds } });
+                            }}
+                            className="text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-red-500 dark:hover:text-red-400 transition-colors"
+                          >
+                            <XMarkIcon className="w-3 h-3" />
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Group Policy */}
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                    Group Policy
+                  </label>
+                  <select
+                    value={fsOpenClawConfig.groupPolicy}
+                    onChange={(e) => {
+                      const update = { groupPolicy: e.target.value as FeishuOpenClawConfig['groupPolicy'] };
+                      handleFeishuOpenClawChange(update);
+                      void handleSaveFeishuOpenClawConfig(update);
+                    }}
+                    className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-sm transition-colors"
+                  >
+                    <option value="allowlist">Allowlist</option>
+                    <option value="open">Open</option>
+                    <option value="disabled">Disabled</option>
+                  </select>
+                </div>
+
+                {/* Group Allow From */}
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                    Group Allow From (Chat IDs)
+                  </label>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={feishuGroupAllowIdInput}
+                      onChange={(e) => setFeishuGroupAllowIdInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          const id = feishuGroupAllowIdInput.trim();
+                          if (id && !fsOpenClawConfig.groupAllowFrom.includes(id)) {
+                            const newIds = [...fsOpenClawConfig.groupAllowFrom, id];
+                            handleFeishuOpenClawChange({ groupAllowFrom: newIds });
+                            setFeishuGroupAllowIdInput('');
+                            void imService.updateConfig({ feishu: { ...fsOpenClawConfig, groupAllowFrom: newIds } });
+                          }
+                        }
+                      }}
+                      className="block flex-1 rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-sm transition-colors"
+                      placeholder="输入飞书群 Chat ID"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const id = feishuGroupAllowIdInput.trim();
+                        if (id && !fsOpenClawConfig.groupAllowFrom.includes(id)) {
+                          const newIds = [...fsOpenClawConfig.groupAllowFrom, id];
+                          handleFeishuOpenClawChange({ groupAllowFrom: newIds });
+                          setFeishuGroupAllowIdInput('');
+                          void imService.updateConfig({ feishu: { ...fsOpenClawConfig, groupAllowFrom: newIds } });
+                        }
+                      }}
+                      className="px-3 py-2 rounded-lg text-xs font-medium bg-claude-accent/10 text-claude-accent hover:bg-claude-accent/20 transition-colors"
+                    >
+                      {i18nService.t('add') || '添加'}
+                    </button>
+                  </div>
+                  {fsOpenClawConfig.groupAllowFrom.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5 mt-1.5">
+                      {fsOpenClawConfig.groupAllowFrom.map((id) => (
+                        <span
+                          key={id}
+                          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border dark:text-claude-darkText text-claude-text"
+                        >
+                          {id}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const newIds = fsOpenClawConfig.groupAllowFrom.filter((gid) => gid !== id);
+                              handleFeishuOpenClawChange({ groupAllowFrom: newIds });
+                              void imService.updateConfig({ feishu: { ...fsOpenClawConfig, groupAllowFrom: newIds } });
+                            }}
+                            className="text-claude-textSecondary dark:text-claude-darkTextSecondary hover:text-red-500 dark:hover:text-red-400 transition-colors"
+                          >
+                            <XMarkIcon className="w-3 h-3" />
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Reply Mode */}
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                    Reply Mode
+                  </label>
+                  <select
+                    value={fsOpenClawConfig.replyMode}
+                    onChange={(e) => {
+                      const update = { replyMode: e.target.value as FeishuOpenClawConfig['replyMode'] };
+                      handleFeishuOpenClawChange(update);
+                      void handleSaveFeishuOpenClawConfig(update);
+                    }}
+                    className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-sm transition-colors"
+                  >
+                    <option value="auto">Auto（自动选择）</option>
+                    <option value="static">Static（静态回复）</option>
+                    <option value="streaming">Streaming（流式回复）</option>
+                  </select>
+                </div>
+
+                {/* History Limit */}
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                    History Limit
+                  </label>
+                  <input
+                    type="number"
+                    value={fsOpenClawConfig.historyLimit}
+                    onChange={(e) => handleFeishuOpenClawChange({ historyLimit: parseInt(e.target.value) || 50 })}
+                    onBlur={() => handleSaveFeishuOpenClawConfig()}
+                    className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-sm transition-colors"
+                    min="1"
+                    max="200"
+                  />
+                </div>
+
+                {/* Media Max MB */}
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-medium dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                    Media Max (MB)
+                  </label>
+                  <input
+                    type="number"
+                    value={fsOpenClawConfig.mediaMaxMb}
+                    onChange={(e) => handleFeishuOpenClawChange({ mediaMaxMb: parseInt(e.target.value) || 30 })}
+                    onBlur={() => handleSaveFeishuOpenClawConfig()}
+                    className="block w-full rounded-lg dark:bg-claude-darkSurface/80 bg-claude-surface/80 dark:border-claude-darkBorder/60 border-claude-border/60 border focus:border-claude-accent focus:ring-1 focus:ring-claude-accent/30 dark:text-claude-darkText text-claude-text px-3 py-2 text-sm transition-colors"
+                    min="1"
+                    max="50"
+                  />
+                </div>
+              </div>
+            </details>
 
             <div className="pt-1">
               {renderConnectivityTestButton('feishu')}
@@ -910,6 +1275,9 @@ const IMSettings: React.FC = () => {
                     <option value="disabled">Disabled（禁用 DM）</option>
                   </select>
                 </div>
+
+                {/* Pairing Requests (shown when dmPolicy is 'pairing') */}
+                {tgOpenClawConfig.dmPolicy === 'pairing' && renderPairingSection('telegram')}
 
                 {/* Allow From */}
                 <div className="space-y-1.5">
@@ -1216,6 +1584,9 @@ const IMSettings: React.FC = () => {
                     <option value="disabled">Disabled（禁用 DM）</option>
                   </select>
                 </div>
+
+                {/* Pairing Requests (shown when dmPolicy is 'pairing') */}
+                {dcOpenClawConfig.dmPolicy === 'pairing' && renderPairingSection('discord')}
 
                 {/* Allow From (User IDs) */}
                 <div className="space-y-1.5">

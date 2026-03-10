@@ -414,6 +414,14 @@ interface IElectronAPI {
       configOverride?: Partial<IMGatewayConfig>
     ) => Promise<{ success: boolean; result?: IMConnectivityTestResult; error?: string }>;
     getStatus: () => Promise<{ success: boolean; status?: IMGatewayStatus; error?: string }>;
+    listPairingRequests: (platform: string) => Promise<{
+      success: boolean;
+      requests: Array<{ id: string; code: string; createdAt: string; lastSeenAt: string; meta?: Record<string, string> }>;
+      allowFrom: string[];
+      error?: string;
+    }>;
+    approvePairingCode: (platform: string, code: string) => Promise<{ success: boolean; error?: string }>;
+    rejectPairingRequest: (platform: string, code: string) => Promise<{ success: boolean; error?: string }>;
     onStatusChange: (callback: (status: IMGatewayStatus) => void) => () => void;
     onMessageReceived: (callback: (message: IMMessage) => void) => () => void;
   };
@@ -444,7 +452,7 @@ interface IElectronAPI {
 // IM Gateway types
 interface IMGatewayConfig {
   dingtalk: DingTalkConfig;
-  feishu: FeishuConfig;
+  feishu: FeishuOpenClawConfig;
   telegram: TelegramOpenClawConfig;
   qq: QQConfig;
   discord: DiscordOpenClawConfig;
@@ -466,15 +474,26 @@ interface DingTalkConfig {
   debug?: boolean;
 }
 
-interface FeishuConfig {
+interface FeishuOpenClawGroupConfig {
+  requireMention?: boolean;
+  allowFrom?: string[];
+  systemPrompt?: string;
+}
+
+interface FeishuOpenClawConfig {
   enabled: boolean;
   appId: string;
   appSecret: string;
   domain: 'feishu' | 'lark' | string;
-  encryptKey?: string;
-  verificationToken?: string;
-  renderMode: 'text' | 'card';
-  debug?: boolean;
+  dmPolicy: 'pairing' | 'allowlist' | 'open' | 'disabled';
+  allowFrom: string[];
+  groupPolicy: 'allowlist' | 'open' | 'disabled';
+  groupAllowFrom: string[];
+  groups: Record<string, FeishuOpenClawGroupConfig>;
+  historyLimit: number;
+  replyMode: 'auto' | 'static' | 'streaming';
+  mediaMaxMb: number;
+  debug: boolean;
 }
 
 interface TelegramOpenClawGroupConfig {

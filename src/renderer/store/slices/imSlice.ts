@@ -8,7 +8,7 @@ import type {
   IMGatewayConfig,
   IMGatewayStatus,
   DingTalkConfig,
-  FeishuConfig,
+  FeishuOpenClawConfig,
   TelegramOpenClawConfig,
   QQConfig,
   DiscordOpenClawConfig,
@@ -46,7 +46,7 @@ const imSlice = createSlice({
     setDingTalkConfig: (state, action: PayloadAction<Partial<DingTalkConfig>>) => {
       state.config.dingtalk = { ...state.config.dingtalk, ...action.payload };
     },
-    setFeishuConfig: (state, action: PayloadAction<Partial<FeishuConfig>>) => {
+    setFeishuConfig: (state, action: PayloadAction<Partial<FeishuOpenClawConfig>>) => {
       state.config.feishu = { ...state.config.feishu, ...action.payload };
     },
     setTelegramOpenClawConfig: (state, action: PayloadAction<Partial<TelegramOpenClawConfig>>) => {

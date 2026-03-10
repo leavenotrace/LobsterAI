@@ -6,7 +6,6 @@
 export * from './types';
 export { IMStore } from './imStore';
 export { DingTalkGateway } from './dingtalkGateway';
-export { FeishuGateway } from './feishuGateway';
 export { NimGateway } from './nimGateway';
 export { IMChatHandler } from './imChatHandler';
 export { IMCoworkHandler, type IMCoworkHandlerOptions } from './imCoworkHandler';

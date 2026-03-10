@@ -294,6 +294,11 @@ contextBridge.exposeInMainWorld('electron', {
     // Status
     getStatus: () => ipcRenderer.invoke('im:status:get'),
 
+    // Pairing
+    listPairingRequests: (platform: string) => ipcRenderer.invoke('im:pairing:list', platform),
+    approvePairingCode: (platform: string, code: string) => ipcRenderer.invoke('im:pairing:approve', platform, code),
+    rejectPairingRequest: (platform: string, code: string) => ipcRenderer.invoke('im:pairing:reject', platform, code),
+
     // Event listeners
     onStatusChange: (callback: (status: any) => void) => {
       const handler = (_event: any, status: any) => callback(status);

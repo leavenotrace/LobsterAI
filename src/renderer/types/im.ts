@@ -27,15 +27,26 @@ export interface DingTalkGatewayStatus {
 
 // ==================== Feishu Types ====================
 
-export interface FeishuConfig {
+export interface FeishuOpenClawGroupConfig {
+  requireMention?: boolean;
+  allowFrom?: string[];
+  systemPrompt?: string;
+}
+
+export interface FeishuOpenClawConfig {
   enabled: boolean;
   appId: string;
   appSecret: string;
   domain: 'feishu' | 'lark' | string;
-  encryptKey?: string;
-  verificationToken?: string;
-  renderMode: 'text' | 'card';
-  debug?: boolean;
+  dmPolicy: 'pairing' | 'allowlist' | 'open' | 'disabled';
+  allowFrom: string[];
+  groupPolicy: 'allowlist' | 'open' | 'disabled';
+  groupAllowFrom: string[];
+  groups: Record<string, FeishuOpenClawGroupConfig>;
+  historyLimit: number;
+  replyMode: 'auto' | 'static' | 'streaming';
+  mediaMaxMb: number;
+  debug: boolean;
 }
 
 export interface FeishuGatewayStatus {
@@ -205,7 +216,7 @@ export type IMPlatform = 'dingtalk' | 'feishu' | 'qq' | 'telegram' | 'discord' |
 
 export interface IMGatewayConfig {
   dingtalk: DingTalkConfig;
-  feishu: FeishuConfig;
+  feishu: FeishuOpenClawConfig;
   telegram: TelegramOpenClawConfig;
   qq: QQConfig;
   discord: DiscordOpenClawConfig;
@@ -320,6 +331,23 @@ export interface IMConnectivityTestResponse {
   error?: string;
 }
 
+// ==================== Pairing Types ====================
+
+export interface PairingRequest {
+  id: string;
+  code: string;
+  createdAt: string;
+  lastSeenAt: string;
+  meta?: Record<string, string>;
+}
+
+export interface PairingListResult {
+  success: boolean;
+  requests: PairingRequest[];
+  allowFrom: string[];
+  error?: string;
+}
+
 // ==================== Default Configurations ====================
 
 export const DEFAULT_DINGTALK_CONFIG: DingTalkConfig = {
@@ -330,13 +358,20 @@ export const DEFAULT_DINGTALK_CONFIG: DingTalkConfig = {
   debug: true,
 };
 
-export const DEFAULT_FEISHU_CONFIG: FeishuConfig = {
+export const DEFAULT_FEISHU_OPENCLAW_CONFIG: FeishuOpenClawConfig = {
   enabled: false,
   appId: '',
   appSecret: '',
   domain: 'feishu',
-  renderMode: 'card',
-  debug: true,
+  dmPolicy: 'pairing',
+  allowFrom: [],
+  groupPolicy: 'allowlist',
+  groupAllowFrom: [],
+  groups: { '*': { requireMention: true } },
+  historyLimit: 50,
+  replyMode: 'auto',
+  mediaMaxMb: 30,
+  debug: false,
 };
 
 export const DEFAULT_DISCORD_OPENCLAW_CONFIG: DiscordOpenClawConfig = {
@@ -410,7 +445,7 @@ export const DEFAULT_IM_SETTINGS: IMSettings = {
 
 export const DEFAULT_IM_CONFIG: IMGatewayConfig = {
   dingtalk: DEFAULT_DINGTALK_CONFIG,
-  feishu: DEFAULT_FEISHU_CONFIG,
+  feishu: DEFAULT_FEISHU_OPENCLAW_CONFIG,
   telegram: DEFAULT_TELEGRAM_OPENCLAW_CONFIG,
   qq: DEFAULT_QQ_CONFIG,
   discord: DEFAULT_DISCORD_OPENCLAW_CONFIG,

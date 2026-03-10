@@ -222,6 +222,27 @@ class IMService {
     const status = this.getStatus();
     return status.dingtalk.connected || status.feishu.connected || status.telegram.connected || status.discord.connected || status.nim.connected || status.xiaomifeng.connected || status.wecom.connected;
   }
+
+  /**
+   * List pending pairing requests and approved allowFrom for a platform
+   */
+  async listPairingRequests(platform: string) {
+    return window.electron.im.listPairingRequests(platform);
+  }
+
+  /**
+   * Approve a pairing code
+   */
+  async approvePairingCode(platform: string, code: string) {
+    return window.electron.im.approvePairingCode(platform, code);
+  }
+
+  /**
+   * Reject a pairing request
+   */
+  async rejectPairingRequest(platform: string, code: string) {
+    return window.electron.im.rejectPairingRequest(platform, code);
+  }
 }
 
 export const imService = new IMService();

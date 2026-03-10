@@ -15,6 +15,7 @@ const LOBSTERAI_SESSION_PREFIX = 'lobsterai:';
 const CHANNEL_PLATFORM_MAP: Record<string, IMPlatform> = {
   telegram: 'telegram',
   discord: 'discord',
+  feishu: 'feishu',
 };
 
 /** Parse a channel sessionKey into platform + conversationId.
@@ -60,6 +61,7 @@ const MAIN_AGENT_SESSION_RE = /^agent:[^:]+:main$/;
 const CHANNEL_TITLE_PREFIX: Record<string, string> = {
   telegram: '[TG]',
   discord: '[Discord]',
+  feishu: '[飞书]',
 };
 
 export interface ChannelSessionSyncDeps {

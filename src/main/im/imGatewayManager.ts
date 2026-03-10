@@ -9,7 +9,6 @@ import * as path from 'path';
 import * as os from 'os';
 import * as fs from 'fs';
 import { DingTalkGateway } from './dingtalkGateway';
-import { FeishuGateway } from './feishuGateway';
 import { NimGateway } from './nimGateway';
 import { XiaomifengGateway } from './xiaomifengGateway';
 import { QQGateway } from './qqGateway';
@@ -58,7 +57,6 @@ export interface IMGatewayManagerOptions {
 
 export class IMGatewayManager extends EventEmitter {
   private dingtalkGateway: DingTalkGateway;
-  private feishuGateway: FeishuGateway;
   private nimGateway: NimGateway;
   private xiaomifengGateway: XiaomifengGateway;
   private qqGateway: QQGateway;
@@ -85,7 +83,6 @@ export class IMGatewayManager extends EventEmitter {
 
     this.imStore = new IMStore(db, saveDb);
     this.dingtalkGateway = new DingTalkGateway();
-    this.feishuGateway = new FeishuGateway();
     this.nimGateway = new NimGateway();
     this.xiaomifengGateway = new XiaomifengGateway();
     this.qqGateway = new QQGateway();
@@ -121,21 +118,6 @@ export class IMGatewayManager extends EventEmitter {
       this.emit('statusChange', this.getStatus());
     });
     this.dingtalkGateway.on('message', (message: IMMessage) => {
-      this.emit('message', message);
-    });
-
-    // Feishu events
-    this.feishuGateway.on('connected', () => {
-      this.emit('statusChange', this.getStatus());
-    });
-    this.feishuGateway.on('disconnected', () => {
-      this.emit('statusChange', this.getStatus());
-    });
-    this.feishuGateway.on('error', (error) => {
-      this.emit('error', { platform: 'feishu', error });
-      this.emit('statusChange', this.getStatus());
-    });
-    this.feishuGateway.on('message', (message: IMMessage) => {
       this.emit('message', message);
     });
 
@@ -219,11 +201,6 @@ export class IMGatewayManager extends EventEmitter {
     if (this.dingtalkGateway && !this.dingtalkGateway.isConnected()) {
       console.log('[IMGatewayManager] Reconnecting DingTalk...');
       this.dingtalkGateway.reconnectIfNeeded();
-    }
-
-    if (this.feishuGateway && !this.feishuGateway.isConnected()) {
-      console.log('[IMGatewayManager] Reconnecting Feishu...');
-      this.feishuGateway.reconnectIfNeeded();
     }
 
     if (this.nimGateway && !this.nimGateway.isConnected()) {
@@ -312,7 +289,6 @@ export class IMGatewayManager extends EventEmitter {
     };
 
     this.dingtalkGateway.setMessageCallback(messageHandler);
-    this.feishuGateway.setMessageCallback(messageHandler);
     this.nimGateway.setMessageCallback(messageHandler);
     this.xiaomifengGateway.setMessageCallback(messageHandler);
     this.qqGateway.setMessageCallback(messageHandler);
@@ -327,8 +303,6 @@ export class IMGatewayManager extends EventEmitter {
       let target: any = null;
       if (platform === 'dingtalk') {
         target = this.dingtalkGateway.getNotificationTarget();
-      } else if (platform === 'feishu') {
-        target = this.feishuGateway.getNotificationTarget();
       } else if (platform === 'nim') {
         target = this.nimGateway.getNotificationTarget();
       } else if (platform === 'qq') {
@@ -354,8 +328,6 @@ export class IMGatewayManager extends EventEmitter {
 
       if (platform === 'dingtalk') {
         this.dingtalkGateway.setNotificationTarget(target);
-      } else if (platform === 'feishu') {
-        this.feishuGateway.setNotificationTarget(target);
       } else if (platform === 'nim') {
         this.nimGateway.setNotificationTarget(target);
       } else if (platform === 'qq') {
@@ -477,21 +449,7 @@ export class IMGatewayManager extends EventEmitter {
       }
     }
 
-    // Hot-update Feishu config: restart if credential fields changed
-    if (config.feishu && this.feishuGateway) {
-      const oldFs = previousConfig.feishu;
-      const newFs = { ...oldFs, ...config.feishu };
-      const credentialsChanged =
-        newFs.appId !== oldFs.appId ||
-        newFs.appSecret !== oldFs.appSecret;
-
-      if (credentialsChanged && this.feishuGateway.isConnected()) {
-        console.log('[IMGatewayManager] Feishu credentials changed, restarting gateway...');
-        this.restartGateway('feishu').catch((err) => {
-          console.error('[IMGatewayManager] Failed to restart Feishu after config change:', err.message);
-        });
-      }
-    }
+    // Feishu now runs via OpenClaw; config sync is handled by IPC handler
 
     // Hot-update Xiaomifeng config: restart if credential fields changed
     if (config.xiaomifeng && this.xiaomifengGateway) {
@@ -583,9 +541,19 @@ export class IMGatewayManager extends EventEmitter {
       lastInboundAt: null as number | null,
       lastOutboundAt: null as number | null,
     };
+    // Feishu runs via OpenClaw; reflect enabled+configured state as connected
+    const fsConfig = config.feishu;
+    const feishuStatus = {
+      connected: Boolean(fsConfig?.enabled && fsConfig.appId && fsConfig.appSecret),
+      startedAt: null as string | null,
+      botOpenId: null as string | null,
+      error: null as string | null,
+      lastInboundAt: null as number | null,
+      lastOutboundAt: null as number | null,
+    };
     return {
       dingtalk: this.dingtalkGateway.getStatus(),
-      feishu: this.feishuGateway.getStatus(),
+      feishu: feishuStatus,
       telegram: telegramStatus,
       qq: this.qqGateway.getStatus(),
       discord: discordStatus,
@@ -610,6 +578,11 @@ export class IMGatewayManager extends EventEmitter {
     // Discord always uses OpenClaw mode
     if (platform === 'discord') {
       return this.testDiscordOpenClawConnectivity(configOverride);
+    }
+
+    // Feishu always uses OpenClaw mode
+    if (platform === 'feishu') {
+      return this.testFeishuOpenClawConnectivity(configOverride);
     }
 
     const config = this.buildMergedConfig(configOverride);
@@ -745,20 +718,7 @@ export class IMGatewayManager extends EventEmitter {
       });
     }
 
-    if (platform === 'feishu') {
-      addCheck({
-        code: 'feishu_group_requires_mention',
-        level: 'info',
-        message: '飞书群聊中仅响应 @机器人的消息。',
-        suggestion: '请在群聊中使用 @机器人 + 内容触发对话。',
-      });
-      addCheck({
-        code: 'feishu_event_subscription_required',
-        level: 'info',
-        message: '飞书需要开启消息事件订阅（im.message.receive_v1）才能收消息。',
-        suggestion: '请在飞书开发者后台确认事件订阅、权限和发布状态。',
-      });
-    } else if (platform === 'dingtalk') {
+    if (platform === 'dingtalk') {
       addCheck({
         code: 'dingtalk_bot_membership_hint',
         level: 'info',
@@ -810,7 +770,11 @@ export class IMGatewayManager extends EventEmitter {
     if (platform === 'dingtalk') {
       await this.dingtalkGateway.start(config.dingtalk);
     } else if (platform === 'feishu') {
-      await this.feishuGateway.start(config.feishu);
+      // Feishu runs via OpenClaw gateway (feishu-openclaw-plugin)
+      console.log('[IMGatewayManager] Feishu in OpenClaw mode, syncing config instead of starting direct gateway');
+      await this.syncOpenClawConfig?.();
+      await this.ensureOpenClawGatewayConnected?.();
+      return;
     } else if (platform === 'telegram') {
       // Telegram always runs via OpenClaw gateway
       console.log('[IMGatewayManager] Telegram in OpenClaw mode, syncing config instead of starting direct gateway');
@@ -845,7 +809,10 @@ export class IMGatewayManager extends EventEmitter {
     if (platform === 'dingtalk') {
       await this.dingtalkGateway.stop();
     } else if (platform === 'feishu') {
-      await this.feishuGateway.stop();
+      // Feishu runs via OpenClaw gateway
+      console.log('[IMGatewayManager] Feishu in OpenClaw mode, syncing disabled config');
+      await this.syncOpenClawConfig?.();
+      return;
     } else if (platform === 'telegram') {
       // Telegram always runs via OpenClaw gateway
       console.log('[IMGatewayManager] Telegram in OpenClaw mode, syncing disabled config');
@@ -944,7 +911,6 @@ export class IMGatewayManager extends EventEmitter {
   async stopAll(): Promise<void> {
     await Promise.all([
       this.dingtalkGateway.stop(),
-      this.feishuGateway.stop(),
       this.nimGateway.stop(),
       this.xiaomifengGateway.stop(),
       this.qqGateway.stop(),
@@ -956,7 +922,7 @@ export class IMGatewayManager extends EventEmitter {
    * Check if any gateway is connected
    */
   isAnyConnected(): boolean {
-    return this.dingtalkGateway.isConnected() || this.feishuGateway.isConnected() || this.nimGateway.isConnected() || this.xiaomifengGateway.isConnected() || this.qqGateway.isConnected() || this.wecomGateway.isConnected();
+    return this.dingtalkGateway.isConnected() || this.nimGateway.isConnected() || this.xiaomifengGateway.isConnected() || this.qqGateway.isConnected() || this.wecomGateway.isConnected();
   }
 
   /**
@@ -988,7 +954,7 @@ export class IMGatewayManager extends EventEmitter {
     if (platform === 'wecom') {
       return this.wecomGateway.isConnected();
     }
-    return this.feishuGateway.isConnected();
+    return false;
   }
 
   /**
@@ -1005,8 +971,6 @@ export class IMGatewayManager extends EventEmitter {
     try {
       if (platform === 'dingtalk') {
         await this.dingtalkGateway.sendNotification(text);
-      } else if (platform === 'feishu') {
-        await this.feishuGateway.sendNotification(text);
       } else if (platform === 'nim') {
         await this.nimGateway.sendNotification(text);
       } else if (platform === 'qq') {
@@ -1032,8 +996,6 @@ export class IMGatewayManager extends EventEmitter {
     try {
       if (platform === 'dingtalk') {
         await this.dingtalkGateway.sendNotificationWithMedia(text);
-      } else if (platform === 'feishu') {
-        await this.feishuGateway.sendNotificationWithMedia(text);
       } else if (platform === 'nim') {
         await this.nimGateway.sendNotificationWithMedia(text);
       } else if (platform === 'qq') {
@@ -1196,6 +1158,99 @@ export class IMGatewayManager extends EventEmitter {
       code: 'discord_group_requires_mention',
       level: 'info',
       message: 'Discord 群聊中仅响应 @机器人的消息。',
+    });
+
+    const verdict: IMConnectivityVerdict = checks.some(c => c.level === 'fail')
+      ? 'fail'
+      : checks.some(c => c.level === 'warn')
+        ? 'warn'
+        : 'pass';
+
+    return { platform, testedAt, verdict, checks };
+  }
+
+  /**
+   * Test Feishu connectivity when running via OpenClaw runtime (feishu-openclaw-plugin).
+   * Validates credentials via Feishu API (/open-apis/bot/v3/info).
+   */
+  private async testFeishuOpenClawConnectivity(
+    configOverride?: Partial<IMGatewayConfig>
+  ): Promise<IMConnectivityTestResult> {
+    const checks: IMConnectivityCheck[] = [];
+    const testedAt = Date.now();
+    const platform: IMPlatform = 'feishu';
+
+    const mergedConfig = this.buildMergedConfig(configOverride);
+    const fsConfig = mergedConfig.feishu;
+
+    // Check 1: Credentials present
+    if (!fsConfig?.appId || !fsConfig?.appSecret) {
+      const missing: string[] = [];
+      if (!fsConfig?.appId) missing.push('appId');
+      if (!fsConfig?.appSecret) missing.push('appSecret');
+      checks.push({
+        code: 'missing_credentials',
+        level: 'fail',
+        message: `缺少必要配置项: ${missing.join(', ')}`,
+        suggestion: '请补全 App ID 和 App Secret 后重新测试连通性。',
+      });
+      return { platform, testedAt, verdict: 'fail', checks };
+    }
+
+    // Check 2: Auth probe via Feishu API
+    try {
+      const Lark = await import('@larksuiteoapi/node-sdk');
+      const domain = this.resolveFeishuDomain(fsConfig.domain, Lark);
+      const client = new Lark.Client({
+        appId: fsConfig.appId,
+        appSecret: fsConfig.appSecret,
+        appType: Lark.AppType.SelfBuild,
+        domain,
+      });
+      const response: any = await client.request({
+        method: 'GET',
+        url: '/open-apis/bot/v3/info',
+      });
+      if (response.code !== 0) {
+        throw new Error(response.msg || `code ${response.code}`);
+      }
+      const botName = response.data?.app_name ?? response.data?.bot?.app_name ?? 'unknown';
+      checks.push({
+        code: 'auth_check',
+        level: 'pass',
+        message: `飞书鉴权通过（Bot: ${botName}）`,
+      });
+    } catch (error: any) {
+      checks.push({
+        code: 'auth_check',
+        level: 'fail',
+        message: `飞书鉴权失败: ${error.message}`,
+        suggestion: '请检查 App ID 和 App Secret 是否正确。',
+      });
+      return { platform, testedAt, verdict: 'fail', checks };
+    }
+
+    // Check 3: OpenClaw Gateway running info
+    checks.push({
+      code: 'gateway_running',
+      level: 'info',
+      message: '飞书通过 OpenClaw 运行时运行，Bot 将在 OpenClaw Gateway 启动后自动连接。',
+    });
+
+    // Check 4: Group mention hint
+    checks.push({
+      code: 'feishu_group_requires_mention',
+      level: 'info',
+      message: '飞书群聊中仅响应 @机器人的消息。',
+      suggestion: '请在群聊中使用 @机器人 + 内容触发对话。',
+    });
+
+    // Check 5: Event subscription hint
+    checks.push({
+      code: 'feishu_event_subscription_required',
+      level: 'info',
+      message: '飞书需要开启消息事件订阅（im.message.receive_v1）才能收消息。',
+      suggestion: '请在飞书开发者后台确认事件订阅、权限和发布状态。',
     });
 
     const verdict: IMConnectivityVerdict = checks.some(c => c.level === 'fail')
