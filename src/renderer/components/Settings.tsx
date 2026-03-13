@@ -2033,46 +2033,21 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
         return (
           <div className="space-y-6">
             <div className="space-y-3">
-              <label className="block text-sm font-medium dark:text-claude-darkText text-claude-text">
-                {i18nService.t('coworkAgentEngine')}
-              </label>
-              <div className="space-y-2">
-                {([
-                  {
-                    value: 'yd_cowork',
-                    label: i18nService.t('coworkAgentEngineClaudeLegacy'),
-                    hint: i18nService.t('coworkAgentEngineClaudeLegacyHint'),
-                  },
-                  {
-                    value: 'openclaw',
-                    label: i18nService.t('coworkAgentEngineOpenClaw'),
-                    hint: i18nService.t('coworkAgentEngineOpenClawHint'),
-                  },
-                ] as Array<{ value: CoworkAgentEngine; label: string; hint: string }>).map((option) => {
-                  return (
-                    <label
-                      key={option.value}
-                      className="flex items-start gap-3 rounded-xl border px-3 py-2 text-sm transition-colors cursor-pointer dark:border-claude-darkBorder border-claude-border hover:border-claude-accent"
-                    >
-                      <input
-                        type="radio"
-                        name="cowork-agent-engine"
-                        value={option.value}
-                        checked={coworkAgentEngine === option.value}
-                        onChange={() => setCoworkAgentEngine(option.value)}
-                        className="mt-1"
-                      />
-                      <span>
-                        <span className="block font-medium dark:text-claude-darkText text-claude-text">
-                          {option.label}
-                        </span>
-                        <span className="block text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">
-                          {option.hint}
-                        </span>
-                      </span>
-                    </label>
-                  );
-                })}
+              <div className="flex items-start gap-3 rounded-xl border px-3 py-2 text-sm dark:border-claude-darkBorder border-claude-border">
+                <input
+                  type="radio"
+                  checked={true}
+                  readOnly
+                  className="mt-1"
+                />
+                <span>
+                  <span className="block font-medium dark:text-claude-darkText text-claude-text">
+                    {i18nService.t('coworkAgentEngineOpenClaw')}
+                  </span>
+                  <span className="block text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">
+                    {i18nService.t('coworkAgentEngineOpenClawHint')}
+                  </span>
+                </span>
               </div>
             </div>
             {isOpenClawAgentEngine && (
