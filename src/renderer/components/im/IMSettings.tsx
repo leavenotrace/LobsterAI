@@ -234,11 +234,6 @@ const IMSettings: React.FC = () => {
     await imService.updateConfig({ qq: configToSave });
   };
 
-  // Handle Telegram OpenClaw config change (legacy wrapper)
-  const handleTelegramChange = (field: string, value: string | string[]) => {
-    dispatch(setTelegramOpenClawConfig({ [field]: value }));
-  };
-
   // Handle Discord OpenClaw config change
   const dcOpenClawConfig = config.discord;
   const handleDiscordOpenClawChange = (update: Partial<DiscordOpenClawConfig>) => {
