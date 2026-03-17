@@ -7,6 +7,7 @@ import path from 'path';
 import { getElectronNodeRuntimePath } from './coworkUtil';
 import { syncLocalOpenClawExtensionsIntoRuntime } from './openclawLocalExtensions';
 import { applyBundledOpenClawRuntimeHotfixes } from './openclawRuntimeHotfix';
+import { isSystemProxyEnabled, resolveSystemProxyUrl } from './systemProxy';
 
 const DEFAULT_OPENCLAW_VERSION = '2026.2.23';
 const DEFAULT_GATEWAY_PORT = 18789;
@@ -390,6 +391,17 @@ export class OpenClawEngineManager extends EventEmitter {
       env.PATH = [cliShimDir, env.PATH].filter(Boolean).join(path.delimiter);
     }
 
+    if (isSystemProxyEnabled()) {
+      const proxyUrl = await resolveSystemProxyUrl('https://openrouter.ai');
+      if (proxyUrl) {
+        env.http_proxy = proxyUrl;
+        env.https_proxy = proxyUrl;
+        env.HTTP_PROXY = proxyUrl;
+        env.HTTPS_PROXY = proxyUrl;
+        console.log('[OpenClaw] Injected system proxy for gateway:', proxyUrl);
+      }
+    }
+
     const forkArgs = ['gateway', '--bind', 'loopback', '--port', String(port), '--token', token, '--verbose'];
     console.log(`[OpenClaw] forking gateway: entry=${openclawEntry}, cwd=${runtime.root}, port=${port}, args=${JSON.stringify(forkArgs)}`);
     const child = utilityProcess.fork(
@@ -460,6 +472,13 @@ export class OpenClawEngineManager extends EventEmitter {
         : `Bundled OpenClaw runtime is missing. Expected: ${runtime.expectedPathHint}`,
       canRetry: !runtime.root,
     });
+  }
+
+  async restartGateway(): Promise<OpenClawEngineStatus> {
+    console.log('[OpenClaw] restartGateway: stopping existing gateway...');
+    await this.stopGateway();
+    console.log('[OpenClaw] restartGateway: starting gateway with new env...');
+    return this.startGateway();
   }
 
   private resolveRuntimeMetadata(): RuntimeMetadata {

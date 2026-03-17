@@ -3684,7 +3684,11 @@ if (!gotTheLock) {
         : lastUseSystemProxy;
       const currentUseSystemProxy = getUseSystemProxyFromConfig(newConfig);
       if (currentUseSystemProxy !== previousUseSystemProxy) {
-        void applyProxyPreference(currentUseSystemProxy);
+        void applyProxyPreference(currentUseSystemProxy).then(() => {
+          if (getOpenClawEngineManager().getStatus().phase === 'running') {
+            void getOpenClawEngineManager().restartGateway();
+          }
+        });
       }
       lastUseSystemProxy = currentUseSystemProxy;
     });
