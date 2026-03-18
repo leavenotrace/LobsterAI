@@ -177,8 +177,22 @@ function main() {
     stubPackage(path.join(nodeModulesDir, pkgName), pkgName, stats);
   }
 
-  // Step 2: Clean unnecessary files from node_modules only (not extensions)
+  // Step 2: Clean unnecessary files from node_modules only
   cleanDir(nodeModulesDir, stats);
+
+  // Step 3: Clean node_modules inside extensions (but not extension source files)
+  const extensionsDir = path.join(runtimeRoot, 'extensions');
+  if (fs.existsSync(extensionsDir)) {
+    try {
+      for (const ext of fs.readdirSync(extensionsDir, { withFileTypes: true })) {
+        if (!ext.isDirectory()) continue;
+        const extNodeModules = path.join(extensionsDir, ext.name, 'node_modules');
+        if (fs.existsSync(extNodeModules)) {
+          cleanDir(extNodeModules, stats);
+        }
+      }
+    } catch { /* ignore */ }
+  }
 
   const mbFreed = (stats.bytesFreed / 1024 / 1024).toFixed(1);
   console.log(
