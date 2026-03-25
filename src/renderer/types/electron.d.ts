@@ -489,7 +489,7 @@ interface IElectronAPI {
     onQuotaChanged: (callback: () => void) => () => void;
   }
   enterprise: {
-    getConfig: () => Promise<{ ui?: Record<string, 'hide' | 'disable' | 'readonly'>; version: string; name: string } | null>;
+    getConfig: () => Promise<{ ui?: Record<string, 'hide' | 'disable' | 'readonly'>; disableUpdate?: boolean; version: string; name: string } | null>;
   };
   networkStatus: {
     send: (status: 'online' | 'offline') => void;

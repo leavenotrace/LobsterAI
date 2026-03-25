@@ -10,6 +10,7 @@ export type EnterpriseManifest = {
   version: string;
   name: string;
   ui?: Record<string, EnterpriseUIAction>;
+  disableUpdate?: boolean;
   sync: {
     openclaw: boolean;
     skills: boolean | 'merge' | 'overwrite';

@@ -59,6 +59,7 @@ interface SettingsProps extends SettingsOpenOptions {
   onUpdateFound?: (info: AppUpdateInfo) => void;
   enterpriseConfig?: {
     ui?: Record<string, 'hide' | 'disable' | 'readonly'>;
+    disableUpdate?: boolean;
   } | null;
 }
 
@@ -3423,7 +3424,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
                 <span className="text-sm text-foreground">{i18nService.t('aboutVersion')}</span>
                 <div className="flex items-center gap-2">
                   <span className="text-sm text-secondary">{appVersion}</span>
-                  {enterpriseConfig?.ui?.update !== 'disable' && (
+                  {!enterpriseConfig?.disableUpdate && (
                   <button
                     type="button"
                     disabled={updateCheckStatus === 'checking'}
@@ -3439,7 +3440,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
                     {updateCheckStatus === 'idle' && i18nService.t('checkForUpdate')}
                   </button>
                   )}
-                  {enterpriseConfig?.ui?.update === 'disable' && (
+                  {enterpriseConfig?.disableUpdate && (
                   <span className="text-xs text-claude-textSecondary dark:text-claude-darkTextSecondary">
                     {i18nService.t('settings.enterprise.managed')}
                   </span>

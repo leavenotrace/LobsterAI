@@ -49,6 +49,7 @@ const App: React.FC = () => {
   const [privacyAgreed, setPrivacyAgreed] = useState<boolean | null>(null);
   const [enterpriseConfig, setEnterpriseConfig] = useState<{
     ui?: Record<string, 'hide' | 'disable' | 'readonly'>;
+    disableUpdate?: boolean;
   } | null>(null);
   const toastTimerRef = useRef<number | null>(null);
   const hasInitialized = useRef(false);
@@ -510,6 +511,9 @@ const App: React.FC = () => {
   useEffect(() => {
     if (!isInitialized) return;
 
+    // Enterprise mode: completely skip update detection
+    if (enterpriseConfig?.disableUpdate) return;
+
     let cancelled = false;
     let lastCheckTime = 0;
 
@@ -542,7 +546,7 @@ const App: React.FC = () => {
       window.clearInterval(timer);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
-  }, [isInitialized, runUpdateCheck]);
+  }, [isInitialized, runUpdateCheck, enterpriseConfig]);
 
   // 根据场景选择使用哪个权限组件
   const permissionModal = useMemo(() => {

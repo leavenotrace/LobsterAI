@@ -3758,8 +3758,8 @@ if (!gotTheLock) {
   // App update download & install
   ipcMain.handle('appUpdate:download', async (event, url: string) => {
     // Block downloads in enterprise mode
-    const enterprise = getStore().get<{ ui?: Record<string, string> }>('enterprise_config');
-    if (enterprise?.ui?.update === 'disable') {
+    const enterprise = getStore().get<{ disableUpdate?: boolean }>('enterprise_config');
+    if (enterprise?.disableUpdate) {
       return { success: false, error: 'Updates are managed by enterprise' };
     }
     try {
